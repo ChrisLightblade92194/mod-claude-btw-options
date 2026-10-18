@@ -34,7 +34,7 @@ async function until(condition: () => boolean) {
 }
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`${surface}: tab interni raggruppati per domanda, apertura solo a risposta riuscita, riprova, chiusura di gruppo`, async ($, on) => {
+  test(`${surface}: tab interni raggruppati per domanda, riapertura delle domande passate, riprova, chiusura di gruppo`, async ($, on) => {
     const prompts: string[] = []
     const releases: (() => void)[] = []
     const opened: string[] = []
@@ -131,14 +131,36 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(closed).toEqual([])
     expect(await pane.find({ key: 'btw-0-1' })).toBeUndefined()
     expect(await pane.find({ text: 'Risposta 3' })).toBeDefined()
+    expect(await pane.find({ text: 'Hai risposto: «SQLite»' })).toBeDefined()
+
+    // Una domanda passata: il gruppo riapre le sue schede, anche per le opzioni non approfondite.
+    const reopeners = async () =>
+      (await pane.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('reopen-'))
+    expect(await reopeners()).toHaveLength(1)
+    await pane.press({ key: (await reopeners())[0]!.key! })
+    expect(await pane.find({ text: 'Domanda già risposta: puoi ancora approfondire le sue opzioni.' })).toBeDefined()
+    expect((await pane.find({ key: 'btw-0-1' }))?.text).toContain('Approfondimento aperto')
+    expect((await pane.find({ key: 'btw-0-0' }))?.text).toContain('Approfondisci')
+    const late = pane.press({ key: 'btw-0-0' })
+    await until(() => prompts.length === 5)
+    expect(prompts[4]).toContain('«Postgres»')
+    expect(prompts[4]).toContain('ho già risposto: «SQLite»')
+    expect(prompts[4]).not.toContain('non ho ancora risposto')
+    releases[4]?.()
+    await late
+    expect(await pane.find({ text: 'Risposta 5' })).toBeDefined()
+    await pane.press({ key: 'hide-options' })
+    expect(await pane.find({ key: 'btw-0-0' })).toBeUndefined()
+    expect(closed).toEqual([])
 
     // Una seconda domanda: i suoi tab finiscono in un gruppo a parte.
     const call2 = $.tool.call({ tool: 'AskUserQuestion', questions: CACHE })
     await until(() => calls === 2)
     const third = pane.press({ key: 'btw-0-0' })
-    await until(() => prompts.length === 5)
-    expect(prompts[4]).toContain('«Redis»')
-    releases[4]?.()
+    await until(() => prompts.length === 6)
+    expect(prompts[5]).toContain('«Redis»')
+    expect(prompts[5]).toContain('non ho ancora risposto')
+    releases[5]?.()
     await third
     const groupClosers = async () =>
       (await pane.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('close-group-'))
@@ -146,11 +168,17 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await pane.find({ text: 'Quale database usiamo?' })).toBeDefined()
     expect(await pane.find({ text: 'Che cache usiamo?' })).toBeDefined()
 
+    // Riaprire una domanda passata mentre un'altra è aperta, poi nasconderla, riporta alle schede di quella aperta.
+    await pane.press({ key: (await reopeners())[0]!.key! })
+    expect(await pane.find({ text: 'Domanda già risposta: puoi ancora approfondire le sue opzioni.' })).toBeDefined()
+    await pane.press({ key: 'hide-options' })
+    expect(await pane.find({ text: "Dubbi su un'opzione? Approfondiscila: la selezione nel dialogo resta." })).toBeDefined()
+
     // La crocetta chiude il gruppo intero; chiuso l'ultimo, si chiude il pannello.
     await pane.press({ key: (await groupClosers())[0]!.key! })
     expect(await groupClosers()).toHaveLength(1)
     expect(await pane.find({ text: 'Risposta 3' })).toBeUndefined()
-    expect(await pane.find({ text: 'Risposta 5' })).toBeDefined()
+    expect(await pane.find({ text: 'Risposta 6' })).toBeDefined()
     answer()
     await call2
     expect(closed).toEqual([])

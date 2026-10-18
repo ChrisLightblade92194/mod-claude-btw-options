@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { BtwOption, BtwQuestion, BtwThread } from '../types'
+import type { BtwAsked, BtwOption, BtwQuestion, BtwThread } from '../types'
 
 const PANE = 'btw-opzioni'
 const TITLE = 'btw'
@@ -12,7 +12,9 @@ const SPINNER_SVG =
   '<path d="M12 3a9 9 0 0 1 9 9" fill="none" stroke="#d97757" stroke-width="3" stroke-linecap="round">' +
   '<animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/>' +
   '</path></svg>'
-const pending = atom({ plugin: 'btw-opzioni', key: 'pending' } as const, null)
+const asked = atom({ plugin: 'btw-opzioni', key: 'asked' } as const, {})
+// La chiamata di cui il pannello mostra le schede delle opzioni: quella aperta o una passata riaperta.
+const shown = atom({ plugin: 'btw-opzioni', key: 'shown' } as const, null)
 const threads = atom({ plugin: 'btw-opzioni', key: 'threads' } as const, {})
 const tab = atom({ plugin: 'btw-opzioni', key: 'tab' } as const, null)
 const starting = new Set<string>()
@@ -24,7 +26,23 @@ function isQuestion(value: unknown): value is BtwQuestion {
   return typeof q?.question === 'string' && Array.isArray(q.options)
 }
 
-function forkPrompt(thread: BtwThread): string {
+// L'id di un thread è `<chiamata>:<domanda>:<opzione>`.
+function callOf(id: string): string {
+  return id.slice(0, id.indexOf(':'))
+}
+
+// Le schede tornano alla domanda ancora aperta, se ce n'è una.
+function openCall(all: Record<string, BtwAsked>): string | null {
+  return Object.keys(all).filter(id => !all[id]?.isAnswered).pop() ?? null
+}
+
+function status(thread: BtwThread, call: BtwAsked | undefined): string {
+  if (!call?.isAnswered) return 'Mi hai appena fatto questa domanda a scelta; il dialogo è ancora aperto e non ho ancora risposto.'
+  const answer = call.answers[thread.question]
+  return `Mi avevi fatto questa domanda a scelta e ho già risposto${answer ? `: «${answer}»` : ''}. Ora voglio capire meglio le opzioni, anche quelle che non ho scelto.`
+}
+
+function forkPrompt(thread: BtwThread, call: BtwAsked | undefined): string {
   const options = thread.options
     .map(o => `- ${o.label}${o.description ? `: ${o.description}` : ''}`)
     .join('\n')
@@ -35,7 +53,7 @@ function forkPrompt(thread: BtwThread): string {
 
   return [
     '[btw: domanda laterale, fuori dal filo principale della conversazione]',
-    'Mi hai appena fatto questa domanda a scelta; il dialogo è ancora aperto e non ho ancora risposto.',
+    status(thread, call),
     `Domanda: ${thread.question}`,
     `Opzioni:\n${options}`,
     first?.text ?? '',
@@ -47,7 +65,7 @@ function forkPrompt(thread: BtwThread): string {
     .join('\n\n')
 }
 
-// I tab si raggruppano per domanda d'origine: l'id di un thread è `<chiamata>:<domanda>:<opzione>`.
+// I tab si raggruppano per domanda d'origine.
 function groupByQuestion(all: Record<string, BtwThread>) {
   const groups = new Map<string, { key: string; question: string; ids: string[] }>()
   for (const [id, thread] of Object.entries(all)) {
@@ -70,7 +88,7 @@ async function ask($: EngineInterface, id: string, text: string) {
   const thread = (await read($, threads))[id]
   if (!isSent || !thread) return
 
-  const reply = await $.model.fork({ prompt: forkPrompt(thread) })
+  const reply = await $.model.fork({ prompt: forkPrompt(thread, (await read($, asked))[callOf(id)]) })
   const answer = reply.isAnswered ? reply.text : `_Nessuna risposta (${reply.reason})._`
   await update($, threads, all => {
     const current = all[id]
@@ -135,7 +153,13 @@ async function closeThreads($: EngineInterface, ids: readonly string[]) {
   await update($, threads, all => Object.fromEntries(Object.entries(all).filter(([id]) => !ids.includes(id))))
   const rest = Object.keys(await read($, threads))
   await update($, tab, current => (current !== null && ids.includes(current) ? (rest[rest.length - 1] ?? null) : current))
-  if (rest.length === 0 && (await read($, pending)) === null) await $.ui.close({ id: PANE })
+  if (rest.length === 0 && (await read($, shown)) === null) await $.ui.close({ id: PANE })
+}
+
+async function toggleOptions($: EngineInterface, call: string) {
+  const next = (await read($, shown)) === call ? openCall(await read($, asked)) : call
+  await update($, shown, () => next)
+  if (next === null && Object.keys(await read($, threads)).length === 0) await $.ui.close({ id: PANE })
 }
 
 export const register: Register = on => {
@@ -143,15 +167,38 @@ export const register: Register = on => {
     const questions = (e.questions as readonly unknown[]).filter(isQuestion)
     if (questions.length === 0) return next(e)
 
-    await update($, pending, () => ({ id: e.tool_use_id, questions }))
+    const call = e.tool_use_id
+    await update($, asked, all => ({ ...all, [call]: { questions, answers: {}, isAnswered: false } }))
+    await update($, shown, () => call)
     const opened = await $.ui.open({ id: PANE, title: TITLE })
     if (!opened.isPlaced) $.ui.toast(`btw-opzioni: pannello non mostrato (${opened.reason})`)
 
+    let answers: Record<string, string> = {}
     try {
-      return await next(e)
+      const ran = await next(e)
+      // In questa build il risultato del tool non è tipizzato: answers mappa il testo della domanda alla risposta.
+      const result = ran.result as { answers?: Record<string, string>; response?: string } | undefined
+      if (result) {
+        const given = result.answers ?? {}
+        const typed = result.response
+        answers = Object.fromEntries(
+          questions.flatMap(q => {
+            const answer = given[q.question] ?? typed
+            return answer ? [[q.question, answer]] : []
+          }),
+        )
+      }
+      return ran
     } finally {
-      await update($, pending, current => (current?.id === e.tool_use_id ? null : current))
-      if (Object.keys(await read($, threads)).length === 0) await $.ui.close({ id: PANE })
+      await update($, asked, all => {
+        const current = all[call]
+        return current ? { ...all, [call]: { ...current, answers, isAnswered: true } } : all
+      })
+      const left = openCall(await read($, asked))
+      await update($, shown, current => (current === call ? left : current))
+      if ((await read($, shown)) === null && Object.keys(await read($, threads)).length === 0) {
+        await $.ui.close({ id: PANE })
+      }
     }
   })
 
@@ -160,11 +207,13 @@ export const register: Register = on => {
     const { Box, Text, Markdown, Button } = els
     const Svg = 'Svg' in els ? els.Svg : undefined
     const Input = 'Input' in els ? els.Input : undefined
-    const open = await read($, pending)
+    const calls = await read($, asked)
+    const shownCall = await read($, shown)
+    const open = shownCall ? calls[shownCall] : undefined
     const all = await read($, threads)
     const ids = Object.keys(all)
-    const shown = await read($, tab)
-    const activeId = shown && all[shown] ? shown : ids[ids.length - 1]
+    const tabId = await read($, tab)
+    const activeId = tabId && all[tabId] ? tabId : ids[ids.length - 1]
     const active = activeId ? all[activeId] : undefined
 
     const working = (key: string, text: string) => (
@@ -180,15 +229,25 @@ export const register: Register = on => {
       <Box flexDirection="column" gap={1} paddingX={1}>
         {open && (
           <Box key="options" flexDirection="column" gap={1}>
-            <Text dimColor>Dubbi su un'opzione? Approfondiscila: la selezione nel dialogo resta.</Text>
+            {open.isAnswered ? (
+              <Box flexDirection="row" gap={1} alignItems="center">
+                <Box flexGrow={1} flexShrink={1}>
+                  <Text dimColor>Domanda già risposta: puoi ancora approfondire le sue opzioni.</Text>
+                </Box>
+                <Button key="hide-options" label="▴ Nascondi opzioni" onPress={() => void toggleOptions($, shownCall!)} />
+              </Box>
+            ) : (
+              <Text dimColor>Dubbi su un'opzione? Approfondiscila: la selezione nel dialogo resta.</Text>
+            )}
             {open.questions.map((q, qi) => (
               <Box key={`q-${qi}`} flexDirection="column" gap={1}>
                 <Text>
                   {q.header && <Text bold color="claude">{q.header} · </Text>}
                   <Text bold>{q.question}</Text>
                 </Text>
+                {open.answers[q.question] && <Text dimColor>{`Hai risposto: «${open.answers[q.question]}»`}</Text>}
                 {q.options.map((option, oi) => {
-                  const id = `${open.id}:${qi}:${oi}`
+                  const id = `${shownCall}:${qi}:${oi}`
                   const key = `btw-${qi}-${oi}`
                   const thread = all[id]
                   const isWaiting = thread !== undefined && thread.messages.length < 2
@@ -233,12 +292,23 @@ export const register: Register = on => {
         {activeId && active && (
           <Box key="threads" flexDirection="column" gap={1}>
             <Text bold>Approfondimenti</Text>
-            {groupByQuestion(all).map(group => (
+            {groupByQuestion(all).map(group => {
+              const call = callOf(group.key)
+              const answer = calls[call]?.answers[group.question]
+              return (
               <Box key={`group-${group.key}`} flexDirection="column">
                 <Box flexDirection="row" gap={1} alignItems="center">
-                  <Box flexGrow={1} flexShrink={1}>
+                  <Box flexGrow={1} flexShrink={1} flexDirection="column">
                     <Text dimColor>{group.question}</Text>
+                    {answer && <Text dimColor>{`Hai risposto: «${answer}»`}</Text>}
                   </Box>
+                  {calls[call] && (
+                    <Button
+                      key={`reopen-${group.key}`}
+                      label={shownCall === call ? '▴ Nascondi opzioni' : '▾ Riapri opzioni'}
+                      onPress={() => void toggleOptions($, call)}
+                    />
+                  )}
                   <Button
                     key={`close-group-${group.key}`}
                     label="✕"
@@ -262,7 +332,8 @@ export const register: Register = on => {
                   })}
                 </Box>
               </Box>
-            ))}
+              )
+            })}
             <Box flexDirection="column" gap={1} borderStyle="round" borderColor="claude" paddingX={1}>
               <Text dimColor>{active.question}</Text>
               <Text bold color="claude">{active.option}</Text>

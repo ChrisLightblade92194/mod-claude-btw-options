@@ -9,7 +9,8 @@ When Claude asks you a multiple-choice question, you may not know what an option
 - **Answers that know the context.** The button asks Claude about that option over the current conversation (a tool-less fork of the session, so nothing runs and the main thread is untouched). While it waits, the card shows a spinner. When the answer arrives, the card offers **Apri approfondimento** ("open the explanation"). If the request fails, it offers **↻ Riprova** ("retry").
 - **Runs in parallel.** You can dig into several options at once. The same option is never asked twice.
 - **Tabs inside the panel.** Every explanation has its own tab, grouped under the question it came from. In each tab you can ask follow-up questions with **Chiedi** ("ask"). **Chiudi approfondimento** closes one tab, and **✕** closes a whole group.
-- **Stays while it is useful.** After you answer the question the option cards go away, but your explanations stay in the panel until you close them. The panel closes by itself when nothing is left.
+- **Stays while it is useful.** After you answer the question the option cards go away, but your explanations stay in the panel until you close them. Each group shows the answer you gave. The panel closes by itself when nothing is left.
+- **Reopen past questions.** **▾ Riapri opzioni** ("reopen options") on a group brings back the option cards of that question, so you can still dig into the options you skipped. Claude is told that you already answered, and what you answered. **▴ Nascondi opzioni** ("hide options") puts the cards away again and goes back to the question still open, if there is one.
 
 The mod's interface and the prompt it sends to Claude are in **Italian**. Claude replies in the language of your conversation.
 
@@ -46,7 +47,7 @@ A mod installed from a terminal at the user scope also loads in the desktop app'
 
 ## How it works
 
-- A `tool.call` hook on `AskUserQuestion` records the open question and opens the panel. It closes the panel when the question is answered, unless explanations are still open.
+- A `tool.call` hook on `AskUserQuestion` records every question and, once it is answered, the answer. It opens the panel, and closes it when the question is answered unless explanations are still open.
 - A `ui.render` hook on the panel draws the option cards and the tabs from the mod's session state (`$.state`).
 - Every explanation is one `$.model.fork` call: a single tool-less request over the session's own transcript. The prompt includes the question, all the options and the follow-up history of that tab.
 
