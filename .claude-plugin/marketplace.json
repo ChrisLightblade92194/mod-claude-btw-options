@@ -1,0 +1,12 @@
+{
+  "name": "mod-claude-btw-options",
+  "owner": { "name": "ChrisLightblade92194", "url": "https://github.com/ChrisLightblade92194" },
+  "description": "Claude Code mods by ChrisLightblade92194.",
+  "plugins": [
+    {
+      "name": "btw-opzioni",
+      "source": "./",
+      "description": "Side panel for Claude's multiple-choice questions: dig into any option in a 'by the way' chat without losing your selection."
+    }
+  ]
+}
