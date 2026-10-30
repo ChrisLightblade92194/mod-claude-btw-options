@@ -1,6 +1,6 @@
 {
   "name": "btw-opzioni",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Side panel for Claude's multiple-choice questions: dig into any option in a 'by the way' chat without losing your selection.",
   "author": { "name": "ChrisLightblade92194", "url": "https://github.com/ChrisLightblade92194" },
   "homepage": "https://github.com/ChrisLightblade92194/mod-claude-btw-options",

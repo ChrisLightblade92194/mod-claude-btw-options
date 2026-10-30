@@ -37,9 +37,33 @@ function openCall(all: Record<string, BtwAsked>): string | null {
 }
 
 function status(thread: BtwThread, call: BtwAsked | undefined): string {
+  if (call?.box && !call.isAnswered) {
+    return `Mi hai appena proposto questa scelta nel riquadro di fine turno, con il riepilogo «${call.box.recap}»; il riquadro è ancora aperto e non ho ancora risposto.`
+  }
   if (!call?.isAnswered) return 'Mi hai appena fatto questa domanda a scelta; il dialogo è ancora aperto e non ho ancora risposto.'
   const answer = call.answers[thread.question]
   return `Mi avevi fatto questa domanda a scelta e ho già risposto${answer ? `: «${answer}»` : ''}. Ora voglio capire meglio le opzioni, anche quelle che non ho scelto.`
+}
+
+// Una scelta del riquadro di fine turno: la domanda (`ask`) e i bottoni di risposta, senza le azioni dell'app (commit…).
+function boxQuestion(e: { readonly [key: string]: unknown }): BtwQuestion | undefined {
+  if (typeof e.ask !== 'string' || !Array.isArray(e.actions)) return undefined
+  const options = (e.actions as { label?: unknown; message?: unknown; action?: unknown }[]).flatMap(a =>
+    typeof a?.label === 'string' && a.action === undefined
+      ? [{ label: a.label, ...(typeof a.message === 'string' && a.message !== a.label ? { description: a.message } : {}) }]
+      : [],
+  )
+  // Un bottone solo è una conferma, non una scelta da approfondire.
+  return options.length >= 2 ? { question: e.ask, options } : undefined
+}
+
+// Le schede tornano alla domanda aperta; senza domande né approfondimenti il pannello si chiude.
+async function settle($: EngineInterface, call: string) {
+  const left = openCall(await read($, asked))
+  await update($, shown, current => (current === call ? left : current))
+  if ((await read($, shown)) === null && Object.keys(await read($, threads)).length === 0) {
+    await $.ui.close({ id: PANE })
+  }
 }
 
 function forkPrompt(thread: BtwThread, call: BtwAsked | undefined): string {
@@ -194,12 +218,48 @@ export const register: Register = on => {
         const current = all[call]
         return current ? { ...all, [call]: { ...current, answers, isAnswered: true } } : all
       })
-      const left = openCall(await read($, asked))
-      await update($, shown, current => (current === call ? left : current))
-      if ((await read($, shown)) === null && Object.keys(await read($, threads)).length === 0) {
-        await $.ui.close({ id: PANE })
+      await settle($, call)
+    }
+  })
+
+  // Il riquadro di fine turno resta dopo la chiamata: la scelta si chiude col messaggio successivo.
+  on('tool.call', { tool: 'mcp__ccd_turn__wrap_up' }, async ($, e, next) => {
+    // Letti a runtime: i tipi del tool MCP ci sono solo con il server collegato al salvataggio della mod.
+    const question = boxQuestion(e)
+    if (question) {
+      const call = e.tool_use_id
+      const recap = typeof e.recap === 'string' ? e.recap : ''
+      await update($, asked, all => ({ ...all, [call]: { questions: [question], answers: {}, isAnswered: false, box: { recap } } }))
+      await update($, shown, () => call)
+      const opened = await $.ui.open({ id: PANE, title: TITLE })
+      if (!opened.isPlaced) $.ui.toast(`btw-opzioni: pannello non mostrato (${opened.reason})`)
+    }
+    return next(e)
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    if (!(e as { isMeta?: true }).isMeta) {
+      try {
+        const text = e.text.trim()
+        const all = await read($, asked)
+        const open = Object.keys(all).filter(id => all[id]?.box && !all[id]?.isAnswered)
+        for (const call of open) {
+          await update($, asked, current => {
+            const box = current[call]
+            const question = box?.questions[0]
+            if (!box || !question) return current
+            // Un click su un bottone del riquadro invia la sua etichetta, o il suo messaggio.
+            const picked = question.options.find(o => o.label === text || o.description === text)
+            const answers = picked ? { [question.question]: picked.label } : {}
+            return { ...current, [call]: { ...box, answers, isAnswered: true } }
+          })
+          await settle($, call)
+        }
+      } catch {
+        // Lo stato del pannello non deve mai bloccare un messaggio.
       }
     }
+    return next(e)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -237,7 +297,11 @@ export const register: Register = on => {
                 <Button key="hide-options" label="▴ Nascondi opzioni" onPress={() => void toggleOptions($, shownCall!)} />
               </Box>
             ) : (
-              <Text dimColor>Dubbi su un'opzione? Approfondiscila: la selezione nel dialogo resta.</Text>
+              <Text dimColor>
+                {open.box
+                  ? "Dubbi su un'opzione? Approfondiscila: i bottoni del riquadro restano."
+                  : "Dubbi su un'opzione? Approfondiscila: la selezione nel dialogo resta."}
+              </Text>
             )}
             {open.questions.map((q, qi) => (
               <Box key={`q-${qi}`} flexDirection="column" gap={1}>

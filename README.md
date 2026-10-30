@@ -11,6 +11,7 @@ When Claude asks you a multiple-choice question, you may not know what an option
 - **Tabs inside the panel.** Every explanation has its own tab, grouped under the question it came from. In each tab you can ask follow-up questions with **Chiedi** ("ask"). **Chiudi approfondimento** closes one tab, and **✕** closes a whole group.
 - **Stays while it is useful.** After you answer the question the option cards go away, but your explanations stay in the panel until you close them. Each group shows the answer you gave. The panel closes by itself when nothing is left.
 - **Reopen past questions.** **▾ Riapri opzioni** ("reopen options") on a group brings back the option cards of that question, so you can still dig into the options you skipped. Claude is told that you already answered, and what you answered. **▴ Nascondi opzioni** ("hide options") puts the cards away again and goes back to the question still open, if there is one.
+- **End-of-turn choices too (desktop app).** When Claude ends a turn in the desktop app with a question and two or more reply buttons in the "next step" box, the panel opens with one card per button. App actions such as commit or create PR are left out, and a single confirm button does not open the panel. The choice counts as answered with your next message: if that message is one of the buttons, the group shows it as your answer.
 
 The mod's interface and the prompt it sends to Claude are in **Italian**. Claude replies in the language of your conversation.
 
@@ -48,6 +49,7 @@ A mod installed from a terminal at the user scope also loads in the desktop app'
 ## How it works
 
 - A `tool.call` hook on `AskUserQuestion` records every question and, once it is answered, the answer. It opens the panel, and closes it when the question is answered unless explanations are still open.
+- A `tool.call` hook on `mcp__ccd_turn__wrap_up`, the desktop app's end-of-turn tool, records the box's question and reply buttons. That box stays after the call returns, so a `prompt.submit` hook marks the choice answered when you send your next message.
 - A `ui.render` hook on the panel draws the option cards and the tabs from the mod's session state (`$.state`).
 - Every explanation is one `$.model.fork` call: a single tool-less request over the session's own transcript. The prompt includes the question, all the options and the follow-up history of that tab.
 
@@ -61,7 +63,7 @@ claude plugin validate .
 claude plugin test .
 ```
 
-The tests in `tests/` drive the whole flow on the terminal and desktop surfaces: parallel explanations, the button that appears only after a successful answer, retry, follow-up questions, grouping by question and closing a group.
+The tests in `tests/` drive the whole flow on the terminal and desktop surfaces: parallel explanations, the button that appears only after a successful answer, retry, follow-up questions, grouping by question, closing a group, and the end-of-turn box.
 
 To try local changes, load the folder with `claude --plugin-dir <this folder>`, or name it in `CLAUDE_CODE_PLUGIN_DIRS`.
 

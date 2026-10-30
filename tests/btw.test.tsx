@@ -3,6 +3,7 @@ import { expect, test } from 'claude-code/testing'
 declare const setTimeout: (fn: () => void, ms: number) => unknown
 
 const PLUGIN = 'btw-opzioni'
+const WRAP_UP = 'mcp__ccd_turn__wrap_up'
 const QUESTIONS = [
   {
     question: 'Quale database usiamo?',
@@ -28,9 +29,9 @@ const CACHE = [
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const PANE_PROPS = { title: 'btw', isFocused: true, bodyColumns: 60, placement: 'dock' } as never
 
-async function until(condition: () => boolean) {
-  for (let i = 0; i < 200 && !condition(); i++) await new Promise<void>(r => setTimeout(r, 5))
-  expect(condition()).toBe(true)
+async function until(condition: () => boolean | Promise<boolean>) {
+  for (let i = 0; i < 200 && !(await condition()); i++) await new Promise<void>(r => setTimeout(r, 5))
+  expect(await condition()).toBe(true)
 }
 
 for (const surface of ['terminal', 'desktop'] as const) {
@@ -184,5 +185,80 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(closed).toEqual([])
     await pane.press({ key: (await groupClosers())[0]!.key! })
     expect(closed).toEqual([PLUGIN])
+  })
+
+  test(`${surface}: scelta del riquadro di fine turno`, async ($, on) => {
+    const prompts: string[] = []
+    const releases: (() => void)[] = []
+    const opened: string[] = []
+    const closed: string[] = []
+
+    on('model.fork', async (_$, e) => {
+      prompts.push(e.prompt)
+      const n = prompts.length
+      await new Promise<void>(resolve => releases.push(resolve))
+      return { value: { isAnswered: true as const, text: `Risposta ${n}`, usage: USAGE } }
+    })
+    on('ui.open', (_$, e) => {
+      opened.push(e.id)
+      return { value: { isPlaced: true } } as never
+    })
+    on('ui.close', (_$, e) => {
+      closed.push(e.id)
+      return { value: undefined } as never
+    })
+    on('tool.call', { tool: WRAP_UP }, async () => ({ result: {} }) as never)
+    on('prompt.submit', (_$, e) => ({ text: e.text }) as never)
+
+    // Il riquadro resta dopo la chiamata: le schede compaiono, i bottoni dell'app (commit…) no.
+    await $.tool.call({
+      tool: WRAP_UP,
+      recap: 'Lo schema della convenzione è pronto.',
+      ask: 'Quale ambito per la prima versione?',
+      actions: [
+        { label: 'Prima la convenzione' },
+        { label: 'Convenzione più tool', message: 'Fai la convenzione e anche il tool' },
+        { action: 'commit' },
+      ],
+    } as never)
+    expect(opened).toEqual([PLUGIN])
+    const pane = await $.ui.mount({ plugin: PLUGIN, surface, component: 'Pane', requestId: PLUGIN, props: PANE_PROPS })
+    expect(await pane.findAll({ type: 'Button' })).toHaveLength(2)
+    expect(await pane.find({ text: "Dubbi su un'opzione? Approfondiscila: i bottoni del riquadro restano." })).toBeDefined()
+    expect(await pane.find({ text: 'Fai la convenzione e anche il tool' })).toBeDefined()
+
+    const first = pane.press({ key: 'btw-0-1' })
+    await until(() => prompts.length === 1)
+    expect(prompts[0]).toContain('«Convenzione più tool»')
+    expect(prompts[0]).toContain('Domanda: Quale ambito per la prima versione?')
+    expect(prompts[0]).toContain('- Prima la convenzione')
+    expect(prompts[0]).toContain('riquadro di fine turno')
+    expect(prompts[0]).toContain('non ho ancora risposto')
+    expect(prompts[0]).toContain('Lo schema della convenzione è pronto.')
+    releases[0]?.()
+    await first
+
+    // Il messaggio successivo chiude la scelta: un bottone del riquadro diventa la risposta.
+    await $.prompt.submit({ text: 'Fai la convenzione e anche il tool' } as never)
+    await until(async () => (await pane.find({ key: 'btw-0-0' })) === undefined)
+    expect(await pane.find({ text: 'Hai risposto: «Convenzione più tool»' })).toBeDefined()
+    expect(closed).toEqual([])
+    const reopen = (await pane.findAll({ type: 'Button' })).find(b => b.key?.startsWith('reopen-'))
+    await pane.press({ key: reopen!.key! })
+    const late = pane.press({ key: 'btw-0-0' })
+    await until(() => prompts.length === 2)
+    expect(prompts[1]).toContain('ho già risposto: «Convenzione più tool»')
+    releases[1]?.()
+    await late
+    await pane.press({ key: 'hide-options' })
+
+    const closer = (await pane.findAll({ type: 'Button' })).find(b => b.key?.startsWith('close-group-'))
+    await pane.press({ key: closer!.key! })
+    expect(closed).toEqual([PLUGIN])
+
+    // Un solo bottone, o nessuna domanda, non è una scelta da approfondire: il pannello non si apre.
+    await $.tool.call({ tool: WRAP_UP, recap: 'Fatto.', ask: 'Faccio il push?', actions: [{ label: 'Sì, push' }] } as never)
+    await $.tool.call({ tool: WRAP_UP, recap: 'Fatto.' } as never)
+    expect(opened).toEqual([PLUGIN])
   })
 }

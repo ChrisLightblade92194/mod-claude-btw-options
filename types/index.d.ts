@@ -4,8 +4,14 @@ export type BtwOption = { label: string; description?: string }
 
 export type BtwQuestion = { question: string; header?: string; options: BtwOption[]; multiSelect?: boolean }
 
-// Una chiamata ad AskUserQuestion: le sue domande e, una volta chiusa, le risposte (testo della domanda -> risposta).
-export type BtwAsked = { questions: BtwQuestion[]; answers: Record<string, string>; isAnswered: boolean }
+// Una chiamata ad AskUserQuestion, o una scelta del riquadro di fine turno (`box`, con il suo riepilogo):
+// le sue domande e, una volta chiusa, le risposte (testo della domanda -> risposta).
+export type BtwAsked = {
+  questions: BtwQuestion[]
+  answers: Record<string, string>
+  isAnswered: boolean
+  box?: { recap: string }
+}
 
 export type BtwThread = {
   question: string
