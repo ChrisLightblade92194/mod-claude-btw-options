@@ -44,6 +44,7 @@ A mod installed from a terminal at the user scope also loads in the desktop app'
 
 - **First click on the desktop.** The desktop app gives keyboard focus to a panel on the first click. If the panel does not have focus yet, the first click on a button may only focus it, and you need a second click.
 - **Tabs are drawn by the mod.** A mod cannot switch the desktop app's own tabs, so the explanations live in tabs inside the **btw** panel.
+- **Narrow follow-up field on the desktop.** The desktop app draws a mod's text field at a fixed width of about 20 characters, and the mods API has no prop to widen it. What you type scrolls inside the field.
 - **Session-scoped.** Explanations are kept for the current session only. A new session starts empty.
 
 ## How it works

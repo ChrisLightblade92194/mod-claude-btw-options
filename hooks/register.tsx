@@ -411,9 +411,10 @@ export const register: Register = on => {
               {active.isBusy && working('busy', 'Claude sta rispondendo…')}
               {Input && (
                 <Box flexDirection="column" gap={1}>
+                  {/* Sul desktop il campo ha la larghezza fissa del surface: un segnaposto corto non viene tagliato. */}
                   <Input
                     key={`ask-${activeId}-${active.messages.filter(m => m.role === 'io').length}`}
-                    placeholder="Altra domanda su questa opzione…"
+                    placeholder="Altra domanda…"
                     onInput={text => void drafts.set(activeId, text)}
                     onSubmit={text => {
                       drafts.set(activeId, text)
